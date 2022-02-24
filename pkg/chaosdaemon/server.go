@@ -35,7 +35,7 @@ import (
 
 	"github.com/chaos-mesh/chaos-mesh/pkg/bpm"
 	"github.com/chaos-mesh/chaos-mesh/pkg/chaosdaemon/crclients"
-	pb "github.com/chaos-mesh/chaos-mesh/pkg/chaosdaemon/pb"
+	"github.com/chaos-mesh/chaos-mesh/pkg/chaosdaemon/pb"
 	grpcUtils "github.com/chaos-mesh/chaos-mesh/pkg/grpc"
 )
 
@@ -48,7 +48,7 @@ type Config struct {
 	HTTPPort  int
 	GRPCPort  int
 	Host      string
-	Runtime   string
+	CrClientConfig *crclients.CrClientConfig
 	Profiling bool
 
 	tlsConfig
@@ -88,6 +88,7 @@ func newDaemonServer(containerRuntime string) (*DaemonServer, error) {
 	return NewDaemonServerWithCRClient(crClient), nil
 }
 
+
 // NewDaemonServerWithCRClient returns DaemonServer with container runtime client
 func NewDaemonServerWithCRClient(crClient crclients.ContainerRuntimeInfoClient) *DaemonServer {
 	return &DaemonServer{
@@ -95,6 +96,58 @@ func NewDaemonServerWithCRClient(crClient crclients.ContainerRuntimeInfoClient) 
 		crClient:                 crClient,
 		backgroundProcessManager: bpm.NewBackgroundProcessManager(),
 	}
+}
+
+func newDefaultGRPCServer(crClientConfig *crclients.CrClientConfig,
+	reg prometheus.Registerer, tlsConf tlsConfig) (*grpc.Server, error) {
+	crClient, err := crclients.CreateDefaultContainerRuntimeInfoClient(crClientConfig)
+	if err != nil {
+		return nil, err
+	}
+	ds := NewDaemonServerWithCRClient(crClient)
+	grpcMetrics := grpc_prometheus.NewServerMetrics()
+	grpcMetrics.EnableHandlingTimeHistogram(
+		grpc_prometheus.WithHistogramBuckets([]float64{0.001, 0.01, 0.1, 0.3, 0.6, 1, 3, 6, 10}),
+	)
+	reg.MustRegister(grpcMetrics)
+
+	grpcOpts := []grpc.ServerOption{
+		grpc_middleware.WithUnaryServerChain(
+			grpcUtils.TimeoutServerInterceptor,
+			grpcMetrics.UnaryServerInterceptor(),
+		),
+	}
+
+	if tlsConf != (tlsConfig{}) {
+		caCert, err := ioutil.ReadFile(tlsConf.CaCert)
+		if err != nil {
+			return nil, err
+		}
+		caCertPool := x509.NewCertPool()
+		caCertPool.AppendCertsFromPEM(caCert)
+
+		serverCert, err := tls.LoadX509KeyPair(tlsConf.Cert, tlsConf.Key)
+		if err != nil {
+			return nil, err
+		}
+
+		creds := credentials.NewTLS(&tls.Config{
+			Certificates: []tls.Certificate{serverCert},
+			ClientCAs:    caCertPool,
+			ClientAuth:   tls.RequireAndVerifyClientCert,
+			MinVersion:   tls.VersionTLS13,
+		})
+
+		grpcOpts = append(grpcOpts, grpc.Creds(creds))
+	}
+
+	s := grpc.NewServer(grpcOpts...)
+	grpcMetrics.InitializeMetrics(s)
+
+	pb.RegisterChaosDaemonServer(s, ds)
+	reflection.Register(s)
+
+	return s, nil
 }
 
 func newGRPCServer(containerRuntime string, reg prometheus.Registerer, tlsConf tlsConfig) (*grpc.Server, error) {
@@ -168,7 +221,8 @@ func StartServer(conf *Config, reg RegisterGatherer) error {
 		return err
 	}
 
-	grpcServer, err := newGRPCServer(conf.Runtime, reg, conf.tlsConfig)
+	grpcServer, err := newDefaultGRPCServer(conf.CrClientConfig, reg, conf.tlsConfig)
+	//grpcServer, err := newGRPCServer(conf.CrClientConfig.Runtime, reg, conf.tlsConfig)
 	if err != nil {
 		log.Error(err, "failed to create grpc server")
 		return err
@@ -185,7 +239,7 @@ func StartServer(conf *Config, reg RegisterGatherer) error {
 	})
 
 	g.Go(func() error {
-		log.Info("Starting grpc endpoint", "address", grpcBindAddr, "runtime", conf.Runtime)
+		log.Info("Starting grpc endpoint", "address", grpcBindAddr, "runtime", conf.CrClientConfig.Runtime)
 		if err := grpcServer.Serve(grpcListener); err != nil {
 			log.Error(err, "failed to start grpc endpoint")
 			grpcServer.Stop()

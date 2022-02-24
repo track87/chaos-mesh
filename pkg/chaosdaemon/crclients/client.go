@@ -36,6 +36,13 @@ const (
 	containerdDefaultNS     = "k8s.io"
 )
 
+// CrClientConfig contains the basic cr client configuration.
+type CrClientConfig struct{
+	// Support docker, containerd, crio for now
+	Runtime string
+	SocketPath string
+}
+
 // ContainerRuntimeInfoClient represents a struct which can give you information about container runtime
 type ContainerRuntimeInfoClient interface {
 	GetPidFromContainerID(ctx context.Context, containerID string) (uint32, error)
@@ -44,7 +51,8 @@ type ContainerRuntimeInfoClient interface {
 }
 
 // CreateContainerRuntimeInfoClient creates a container runtime information client.
-func CreateContainerRuntimeInfoClient(containerRuntime string) (ContainerRuntimeInfoClient, error) {
+func CreateContainerRuntimeInfoClient(containerRuntime string) (ContainerRuntimeInfoClient,
+	error) {
 	// TODO: support more container runtime
 
 	var cli ContainerRuntimeInfoClient
@@ -68,6 +76,37 @@ func CreateContainerRuntimeInfoClient(containerRuntime string) (ContainerRuntime
 		}
 	default:
 		return nil, fmt.Errorf("only docker/containerd/crio is supported, but got %s", containerRuntime)
+	}
+
+	return cli, nil
+}
+
+// CreateDefaultContainerRuntimeInfoClient creates a default container runtime information client.
+func CreateDefaultContainerRuntimeInfoClient(config *CrClientConfig) (ContainerRuntimeInfoClient,
+	error) {
+	// TODO: support more container runtime
+
+	var cli ContainerRuntimeInfoClient
+	var err error
+	switch config.Runtime {
+	case ContainerRuntimeDocker:
+		cli, err = docker.New("unix://"+config.SocketPath, "", nil, nil)
+		if err != nil {
+			return nil, err
+		}
+	case ContainerRuntimeContainerd:
+		// TODO(yeya24): add more options?
+		cli, err = containerd.New(config.SocketPath, containerd.WithDefaultNamespace(containerdDefaultNS))
+		if err != nil {
+			return nil, err
+		}
+	case ContainerRuntimeCrio:
+		cli, err = crio.New(config.SocketPath)
+		if err != nil {
+			return nil, err
+		}
+	default:
+		return nil, fmt.Errorf("only docker/containerd/crio is supported, but got %s", config.Runtime)
 	}
 
 	return cli, nil

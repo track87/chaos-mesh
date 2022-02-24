@@ -19,6 +19,7 @@ import (
 	"flag"
 	"os"
 
+	"github.com/chaos-mesh/chaos-mesh/pkg/chaosdaemon/crclients"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/collectors"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -31,7 +32,7 @@ import (
 
 var (
 	log  = ctrl.Log.WithName("chaos-daemon")
-	conf = &chaosdaemon.Config{Host: "0.0.0.0"}
+	conf = &chaosdaemon.Config{Host: "0.0.0.0", CrClientConfig: &crclients.CrClientConfig{}}
 
 	printVersion bool
 )
@@ -40,7 +41,12 @@ func init() {
 	flag.BoolVar(&printVersion, "version", false, "print version information and exit")
 	flag.IntVar(&conf.GRPCPort, "grpc-port", 31767, "the port which grpc server listens on")
 	flag.IntVar(&conf.HTTPPort, "http-port", 31766, "the port which http server listens on")
-	flag.StringVar(&conf.Runtime, "runtime", "docker", "current container runtime")
+	flag.StringVar(&conf.CrClientConfig.Runtime, "runtime", "docker", "current container runtime")
+	flag.StringVar(&conf.CrClientConfig.SocketPath,
+		"runtime-socket-path",
+		"/var/run/docker.sock",
+		"current container runtime socket path",
+		)
 	flag.StringVar(&conf.CaCert, "ca", "", "ca certificate of grpc server")
 	flag.StringVar(&conf.Cert, "cert", "", "certificate of grpc server")
 	flag.StringVar(&conf.Key, "key", "", "key of grpc server")
